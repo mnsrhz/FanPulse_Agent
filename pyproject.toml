@@ -1,0 +1,15 @@
+[project]
+name = "fanpulse_agent"
+version = "0.1.0"
+description = "Weekly WhatsApp sponsor digest agent"
+authors = [
+    { name = "mnsrhz" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.dependencies]
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+openai = "^1.0.0"
