@@ -40,3 +40,32 @@ def test_extracts_sample_onboarding_entities():
     ]
     assert set(profile.sports) >= {"basketball", "soccer", "cricket", "tennis", "formula 1"}
     assert ambiguous[0].name == "India Cricket"
+    assert ambiguous[0].to_dict()["needs_clarification"] is True
+
+    profile_data = profile.to_dict()
+    assert profile_data["phone_number"] == "+14155550123"
+    assert profile_data["digest_schedule"] == "Friday morning"
+    assert [team["name"] for team in profile_data["teams"]] == [
+        "Los Angeles Lakers",
+        "Real Madrid",
+        "India Cricket",
+    ]
+    assert [athlete["name"] for athlete in profile_data["athletes"]] == [
+        "Novak Djokovic",
+        "Max Verstappen",
+    ]
+    assert set(profile_data["sports"]) >= {
+        "basketball",
+        "soccer",
+        "cricket",
+        "tennis",
+        "formula 1",
+    }
+
+
+def test_extracts_49ers_as_american_football():
+    profile, ambiguous = extract_profile_from_text("I am Alex. I follow the 49ers.")
+
+    assert ambiguous == []
+    assert [team.name for team in profile.teams] == ["San Francisco 49ers"]
+    assert profile.sports == ["american football"]

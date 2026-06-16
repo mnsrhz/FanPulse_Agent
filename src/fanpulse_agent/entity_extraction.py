@@ -35,7 +35,7 @@ ENTITY_CATALOG: Tuple[EntityDefinition, ...] = (
     EntityDefinition(
         name="San Francisco 49ers",
         entity_type="team",
-        sport="football",
+        sport="american football",
         aliases=("San Francisco 49ers", "49ers"),
         league="NFL",
     ),
@@ -64,23 +64,24 @@ ENTITY_CATALOG: Tuple[EntityDefinition, ...] = (
 
 
 def extract_profile_from_text(text: str) -> tuple[UserProfile, list[SportsEntity]]:
-    profile = UserProfile(user_id="onboarding")
-    profile.name = _extract_name(text)
-    profile.phone_number = _extract_phone_number(text)
-    profile.timezone = _extract_timezone(text) or profile.timezone
-    profile.digest_schedule = _extract_digest_schedule(text)
-    profile.whatsapp_consent = bool(re.search(r"\bwhatsapp\b", text, re.IGNORECASE))
-
     entities = _extract_entities(text)
     teams = [entity for entity in entities if entity.entity_type == "team"]
     athletes = [entity for entity in entities if entity.entity_type == "athlete"]
     sports = _ordered_unique(entity.sport for entity in entities if entity.sport)
 
-    profile.teams = teams
-    profile.athletes = athletes
-    profile.sports = sports
-    profile.favorite_teams = teams
-    profile.favorite_sports = sports
+    profile = UserProfile(
+        user_id="onboarding",
+        name=_extract_name(text) or "Fan",
+        phone_number=_extract_phone_number(text),
+        timezone=_extract_timezone(text) or "America/Los_Angeles",
+        digest_schedule=_extract_digest_schedule(text) or "Friday morning",
+        whatsapp_consent=bool(re.search(r"\bwhatsapp\b", text, re.IGNORECASE)),
+        teams=teams,
+        athletes=athletes,
+        sports=sports,
+        favorite_teams=teams,
+        favorite_sports=sports,
+    )
 
     ambiguous = [
         entity
@@ -125,11 +126,12 @@ def _extract_entities(text: str) -> List[SportsEntity]:
                 name=definition.name,
                 entity_type=definition.entity_type,
                 sport=definition.sport,
-                league=definition.league,
+                source_text=definition.name,
                 confidence=definition.confidence,
+                needs_clarification=definition.needs_clarification,
+                clarification_prompt=definition.clarification_prompt,
+                league=definition.league,
             )
-            entity.needs_clarification = definition.needs_clarification
-            entity.clarification_prompt = definition.clarification_prompt
             entities.append(entity)
             seen_names.add(definition.name)
     return entities

@@ -11,10 +11,13 @@ def utc_now_iso() -> str:
 class SportsEntity:
     name: str
     entity_type: str
-    sport: Optional[str] = None
+    sport: str
+    source_text: str = ""
+    confidence: float = 0.9
+    needs_clarification: bool = False
+    clarification_prompt: Optional[str] = None
     league: Optional[str] = None
     external_id: Optional[str] = None
-    confidence: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -22,15 +25,24 @@ class SportsEntity:
 
 @dataclass
 class UserProfile:
-    user_id: str
-    name: Optional[str] = None
+    name: str = "Fan"
+    phone_number: Optional[str] = None
+    timezone: str = "America/Los_Angeles"
+    digest_schedule: str = "Friday morning"
+    whatsapp_consent: bool = False
+    teams: List[SportsEntity] = field(default_factory=list)
+    athletes: List[SportsEntity] = field(default_factory=list)
+    sports: List[str] = field(default_factory=list)
+    clarification_choices: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None
     favorite_teams: List[SportsEntity] = field(default_factory=list)
     favorite_sports: List[str] = field(default_factory=list)
-    timezone: str = "UTC"
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
+        data["teams"] = [team.to_dict() for team in self.teams]
+        data["athletes"] = [athlete.to_dict() for athlete in self.athletes]
         data["favorite_teams"] = [team.to_dict() for team in self.favorite_teams]
         return data
 
