@@ -75,7 +75,7 @@ def extract_profile_from_text(text: str) -> tuple[UserProfile, list[SportsEntity
         phone_number=_extract_phone_number(text),
         timezone=_extract_timezone(text) or "America/Los_Angeles",
         digest_schedule=_extract_digest_schedule(text) or "Friday morning",
-        whatsapp_consent=bool(re.search(r"\bwhatsapp\b", text, re.IGNORECASE)),
+        whatsapp_consent=_extract_whatsapp_consent(text),
         teams=teams,
         athletes=athletes,
         sports=sports,
@@ -115,18 +115,32 @@ def _extract_digest_schedule(text: str) -> Optional[str]:
     return _title_first_word(match.group(1)) if match else None
 
 
+def _extract_whatsapp_consent(text: str) -> bool:
+    if not re.search(r"\bwhatsapp\b", text, re.IGNORECASE):
+        return False
+
+    refusal_patterns = (
+        r"\bdo\s+not\s+send\b.*\bwhatsapp\b",
+        r"\bdon't\s+send\b.*\bwhatsapp\b",
+        r"\bno\s+whatsapp\b",
+        r"\bdo\s+not\b.*\bwhatsapp\b",
+    )
+    return not any(re.search(pattern, text, re.IGNORECASE) for pattern in refusal_patterns)
+
+
 def _extract_entities(text: str) -> List[SportsEntity]:
     entities: List[SportsEntity] = []
     seen_names = set()
     for definition in ENTITY_CATALOG:
         if definition.name in seen_names:
             continue
-        if any(_contains_alias(text, alias) for alias in definition.aliases):
+        matched_alias = _find_alias(text, definition.aliases)
+        if matched_alias:
             entity = SportsEntity(
                 name=definition.name,
                 entity_type=definition.entity_type,
                 sport=definition.sport,
-                source_text=definition.name,
+                source_text=matched_alias,
                 confidence=definition.confidence,
                 needs_clarification=definition.needs_clarification,
                 clarification_prompt=definition.clarification_prompt,
@@ -137,8 +151,12 @@ def _extract_entities(text: str) -> List[SportsEntity]:
     return entities
 
 
-def _contains_alias(text: str, alias: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text, re.IGNORECASE) is not None
+def _find_alias(text: str, aliases: Tuple[str, ...]) -> Optional[str]:
+    for alias in aliases:
+        match = re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text, re.IGNORECASE)
+        if match:
+            return match.group(0)
+    return None
 
 
 def _ordered_unique(values):

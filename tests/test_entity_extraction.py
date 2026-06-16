@@ -69,3 +69,24 @@ def test_extracts_49ers_as_american_football():
     assert ambiguous == []
     assert [team.name for team in profile.teams] == ["San Francisco 49ers"]
     assert profile.sports == ["american football"]
+
+
+def test_whatsapp_consent_is_false_for_explicit_refusal():
+    refusal_samples = [
+        "Do not send anything on WhatsApp",
+        "Don't send updates on WhatsApp",
+        "No WhatsApp please",
+        "Do not send my digest over WhatsApp",
+    ]
+
+    for text in refusal_samples:
+        profile, _ = extract_profile_from_text(text)
+
+        assert profile.whatsapp_consent is False
+
+
+def test_source_text_uses_matched_alias_from_user_input():
+    profile, _ = extract_profile_from_text("I follow the Lakers")
+
+    assert profile.teams[0].name == "Los Angeles Lakers"
+    assert profile.teams[0].source_text == "Lakers"
