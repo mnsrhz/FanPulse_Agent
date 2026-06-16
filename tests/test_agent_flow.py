@@ -203,3 +203,21 @@ def test_agent_approval_is_idempotent(tmp_path):
 
     assert whatsapp_runs == 1
     assert digest_history_rows == 1
+
+
+def test_weekly_job_runs_for_enrolled_user(tmp_path):
+    from weekly_digest_job import run_weekly_digest_job
+
+    db_path = tmp_path / "weekly.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers and Real Madrid. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    agent.confirm_preferences()
+
+    summary = run_weekly_digest_job(str(db_path))
+
+    assert summary["users_processed"] == 1
+    assert summary["digests_created"] == 1
