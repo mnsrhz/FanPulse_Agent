@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sqlite3
 from html import escape
 from typing import Any, Iterable
@@ -187,7 +189,9 @@ def approve_digest() -> None:
 def run_weekly_job() -> None:
     try:
         from weekly_digest_job import run_weekly_digest_job
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        if exc.name != "weekly_digest_job":
+            raise
         st.session_state.weekly_status = (
             "Weekly job is not installed yet. Task 8 will add weekly_digest_job.py."
         )
@@ -412,8 +416,8 @@ with left:
         f"""
         <div class="fp-card">
             <div class="fp-label">Agent Status</div>
-            <div class="fp-metric">{status_text}</div>
-            <div class="fp-subtle">Database: {st.session_state.db.db_path}</div>
+            <div class="fp-metric">{escape(status_text)}</div>
+            <div class="fp-subtle">Database: {escape(str(st.session_state.db.db_path))}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -421,8 +425,16 @@ with left:
     render_profile(profile)
 
 with right:
-    st.markdown('<div class="fp-shell">', unsafe_allow_html=True)
-    st.markdown("### Chat")
+    st.markdown(
+        """
+        <div class="fp-shell">
+            <div class="fp-kicker">Chat</div>
+            <div class="fp-subtle">Tell FanPulse who you follow, then review and approve the digest.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("")
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
@@ -432,7 +444,6 @@ with right:
     if prompt:
         submit_user_message(prompt)
         st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
     st.write("")
     render_digest(digest)

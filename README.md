@@ -12,11 +12,15 @@ FanPulse AI is a mock-first sports digest agent that onboards a fan through chat
 
 ## Setup
 
+Python 3.11 or newer is required. Create the virtual environment with Python 3.11 when available:
+
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+If your `python` command already points to Python 3.11 or newer, `python -m venv .venv` is also fine.
 
 ## Run The Streamlit App
 
