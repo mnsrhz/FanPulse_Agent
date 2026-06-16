@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from fanpulse_agent.agent import FanPulseAgent
 from fanpulse_agent.database import FanPulseDB
 from fanpulse_agent.models import ToolResult, TraceEntry, UserProfile
 from fanpulse_agent.tools import (
@@ -114,3 +115,24 @@ def test_mock_tools_return_structured_results():
     assert digest_events[0]["entity_name"]
     assert any(event["entity_name"] == "Los Angeles Lakers" for event in digest_events)
     assert all(result.mock for result in [normalized, team, events, athlete, ranked, digest])
+
+
+def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers, Real Madrid, India cricket, "
+        "Novak Djokovic and Max Verstappen. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "clarify_ambiguity"
+    assert "India" in response.message
+    response = agent.resolve_ambiguity("India men's national cricket team")
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+    assert response.digest is not None
+    assert len(response.digest.events) >= 4
+    response = agent.approve_and_send_digest()
+    assert response.requires_action == "complete"
+    assert response.digest.sent is True
