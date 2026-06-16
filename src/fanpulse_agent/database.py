@@ -260,13 +260,17 @@ class FanPulseDB:
                        preferences.clarification_choices_json
                 from users
                 left join preferences on preferences.user_id = users.id
+                where users.whatsapp_consent = 1
+                  and nullif(trim(users.phone_number), '') is not null
                 order by users.id
                 """
             ).fetchall()
             return [self._profile_from_row(connection, row) for row in rows]
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path)
+        connection.execute("pragma foreign_keys = on")
+        return connection
 
     def _find_user_id(
         self, connection: sqlite3.Connection, profile: UserProfile
