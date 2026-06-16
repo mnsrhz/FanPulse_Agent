@@ -368,8 +368,8 @@ def _make_event(payload: Dict[str, Any]) -> Event:
         entities=[entity],
         source_url=payload["source_url"],
         metadata={"sport": payload["sport"], "league": payload["league"]},
+        entity_name=payload["entity_name"],
     )
-    event.entity_name = payload["entity_name"]
     return event
 
 

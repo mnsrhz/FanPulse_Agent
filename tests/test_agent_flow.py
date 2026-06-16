@@ -107,6 +107,10 @@ def test_mock_tools_return_structured_results():
     assert normalized.success is True
     assert team.data["team_id"] == "lakers"
     assert events.data["events"][0].entity_name == "Los Angeles Lakers"
+    assert events.data["events"][0].to_dict()["entity_name"] == "Los Angeles Lakers"
     assert athlete.data["events"][0].entity_name == "Novak Djokovic"
     assert "FanPulse Weekly Digest" in digest.data["digest"].title
+    digest_events = digest.data["digest"].to_dict()["events"]
+    assert digest_events[0]["entity_name"]
+    assert any(event["entity_name"] == "Los Angeles Lakers" for event in digest_events)
     assert all(result.mock for result in [normalized, team, events, athlete, ranked, digest])

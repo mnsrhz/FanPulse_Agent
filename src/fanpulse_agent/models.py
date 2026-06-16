@@ -55,6 +55,7 @@ class Event:
     entities: List[SportsEntity] = field(default_factory=list)
     source_url: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    entity_name: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
