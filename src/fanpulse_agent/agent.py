@@ -75,6 +75,8 @@ class FanPulseAgent:
 
     def confirm_preferences(self) -> AgentResponse:
         profile = self._require_profile()
+        if profile.user_id == "onboarding":
+            profile.user_id = None
         user_id = self.db.save_user_preferences(profile)
         profile.user_id = str(user_id)
         self.current_user_id = user_id
@@ -117,6 +119,10 @@ class FanPulseAgent:
     def approve_and_send_digest(self) -> AgentResponse:
         profile = self._require_profile()
         digest = self._require_digest()
+        if getattr(digest, "sent", False):
+            digest.approved = True
+            return self._response("Digest already sent.", "complete")
+
         if not profile.whatsapp_consent or not profile.phone_number:
             self._trace(
                 "send_blocked",

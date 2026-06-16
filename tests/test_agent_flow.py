@@ -136,3 +136,70 @@ def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
     response = agent.approve_and_send_digest()
     assert response.requires_action == "complete"
     assert response.digest.sent is True
+
+
+def test_agent_persists_distinct_onboarding_users(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+
+    alice = FanPulseAgent(db)
+    response = alice.handle_user_message(
+        "I am Alice. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = alice.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+
+    bob = FanPulseAgent(db)
+    response = bob.handle_user_message(
+        "I am Bob. I follow the 49ers. Send my digest every Friday morning "
+        "to +14155550124 on WhatsApp."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = bob.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            "select name, phone_number from users order by id"
+        ).fetchall()
+
+    assert rows == [
+        ("Alice", "+14155550123"),
+        ("Bob", "+14155550124"),
+    ]
+
+
+def test_agent_approval_is_idempotent(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers, Real Madrid, India cricket, "
+        "Novak Djokovic and Max Verstappen. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "clarify_ambiguity"
+    response = agent.resolve_ambiguity("India men's national cricket team")
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+
+    first_response = agent.approve_and_send_digest()
+    second_response = agent.approve_and_send_digest()
+
+    assert first_response.requires_action == "complete"
+    assert second_response.requires_action == "complete"
+    assert first_response.digest is not None
+    assert second_response.digest is first_response.digest
+    with sqlite3.connect(db_path) as connection:
+        whatsapp_runs = connection.execute(
+            "select count(*) from tool_runs where tool_name = 'whatsapp.send_digest'"
+        ).fetchone()[0]
+        digest_history_rows = connection.execute(
+            "select count(*) from digest_history"
+        ).fetchone()[0]
+
+    assert whatsapp_runs == 1
+    assert digest_history_rows == 1
