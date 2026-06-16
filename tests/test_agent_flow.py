@@ -4,6 +4,14 @@ import pytest
 
 from fanpulse_agent.database import FanPulseDB
 from fanpulse_agent.models import ToolResult, TraceEntry, UserProfile
+from fanpulse_agent.tools import (
+    generate_digest,
+    get_next_team_events_thesportsdb,
+    normalize_sports_entity,
+    rank_events,
+    search_team_thesportsdb,
+    web_search_event_source,
+)
 
 
 def test_database_creates_tables_and_logs_records(tmp_path):
@@ -84,3 +92,21 @@ def test_database_enforces_foreign_keys(tmp_path):
                 """,
                 (999, "sqlite.save_state", 1, "{}"),
             )
+
+
+def test_mock_tools_return_structured_results():
+    normalized = normalize_sports_entity("Lakers")
+    team = search_team_thesportsdb("Los Angeles Lakers")
+    events = get_next_team_events_thesportsdb(team.data["team_id"])
+    athlete = web_search_event_source("Novak Djokovic")
+    ranked = rank_events(
+        events.data["events"] + athlete.data["events"], UserProfile(name="Mansoor")
+    )
+    digest = generate_digest(ranked.data["events"], UserProfile(name="Mansoor"))
+
+    assert normalized.success is True
+    assert team.data["team_id"] == "lakers"
+    assert events.data["events"][0].entity_name == "Los Angeles Lakers"
+    assert athlete.data["events"][0].entity_name == "Novak Djokovic"
+    assert "FanPulse Weekly Digest" in digest.data["digest"].title
+    assert all(result.mock for result in [normalized, team, events, athlete, ranked, digest])
