@@ -214,23 +214,14 @@ class FanPulseAgent:
         for team in profile.teams:
             normalized = self._log_tool(normalize_sports_entity(team.name))
             canonical_name = team.name
+            sport = team.sport
             if normalized.success:
                 normalized_entity = normalized.data["entity"]
                 canonical_name = normalized_entity.name
+                sport = normalized_entity.sport
                 team.external_id = normalized_entity.external_id
 
-            search_result = self._log_tool(search_team_thesportsdb(canonical_name))
-            team_events: List[Event] = []
-            if team.sport == "soccer":
-                soccer_result = self._log_tool(search_soccer_fixture_apifootball(canonical_name))
-                if soccer_result.success:
-                    team_events = soccer_result.data["events"]
-            elif search_result.success:
-                event_result = self._log_tool(
-                    get_next_team_events_thesportsdb(search_result.data["team_id"])
-                )
-                if event_result.success:
-                    team_events = event_result.data["events"]
+            team_events = self._collect_team_events(canonical_name, sport)
 
             if team_events:
                 events.extend(team_events)
@@ -249,6 +240,44 @@ class FanPulseAgent:
                 unresolved.append(athlete.name)
 
         return events, unresolved
+
+    def _collect_team_events(self, canonical_name: str, sport: str) -> List[Event]:
+        if sport == "soccer":
+            soccer_result = self._log_tool(search_soccer_fixture_apifootball(canonical_name))
+            if soccer_result.success:
+                return soccer_result.data["events"]
+
+            sportsdb_events = self._collect_sportsdb_team_events(canonical_name)
+            if sportsdb_events:
+                return sportsdb_events
+            return self._web_fallback_events(canonical_name)
+
+        sportsdb_events = self._collect_sportsdb_team_events(canonical_name)
+        if sportsdb_events:
+            return sportsdb_events
+        return self._web_fallback_events(canonical_name)
+
+    def _collect_sportsdb_team_events(self, canonical_name: str) -> List[Event]:
+        search_result = self._log_tool(search_team_thesportsdb(canonical_name))
+        if not search_result.success:
+            return []
+
+        event_result = self._get_next_team_events_with_retry(search_result.data["team_id"])
+        if event_result.success:
+            return event_result.data["events"]
+        return []
+
+    def _get_next_team_events_with_retry(self, team_id: str) -> ToolResult:
+        first_result = self._log_tool(get_next_team_events_thesportsdb(team_id))
+        if first_result.success:
+            return first_result
+        return self._log_tool(get_next_team_events_thesportsdb(team_id))
+
+    def _web_fallback_events(self, canonical_name: str) -> List[Event]:
+        fallback_result = self._log_tool(web_search_event_source(canonical_name))
+        if fallback_result.success:
+            return fallback_result.data["events"]
+        return []
 
     def _confirm_preferences_response(self) -> AgentResponse:
         profile = self._require_profile()

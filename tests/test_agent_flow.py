@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -117,6 +118,21 @@ def test_mock_tools_return_structured_results():
     assert all(result.mock for result in [normalized, team, events, athlete, ranked, digest])
 
 
+def test_mock_event_to_dict_includes_card_shape_fields():
+    team = search_team_thesportsdb("Los Angeles Lakers")
+    events = get_next_team_events_thesportsdb(team.data["team_id"])
+
+    event_payload = events.data["events"][0].to_dict()
+
+    assert event_payload["sport_icon"] == "🏀"
+    assert event_payload["display_time"] == "Fri, Jun 19 · 7:30 PM PDT"
+    assert event_payload["confidence"] == pytest.approx(0.95)
+    assert event_payload["mock"] is True
+    assert event_payload["incomplete"] is False
+    assert event_payload["source_url"] == "https://www.thesportsdb.com/"
+    assert event_payload["entity_name"] == "Los Angeles Lakers"
+
+
 def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
     db = FanPulseDB(str(tmp_path / "agent.db"))
     agent = FanPulseAgent(db)
@@ -136,6 +152,135 @@ def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
     response = agent.approve_and_send_digest()
     assert response.requires_action == "complete"
     assert response.digest.sent is True
+
+
+def test_agent_persists_approved_sent_and_unresolved_digest_state(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+    response = agent.approve_and_send_digest()
+    assert response.requires_action == "complete"
+
+    with sqlite3.connect(db_path) as connection:
+        payload_json = connection.execute(
+            "select payload_json from digest_history order by id desc limit 1"
+        ).fetchone()[0]
+
+    payload = json.loads(payload_json)
+    assert payload["approved"] is True
+    assert payload["sent"] is True
+    assert payload["unresolved"] == []
+
+
+def test_agent_retries_failed_primary_team_event_fetch_once(tmp_path, monkeypatch):
+    import fanpulse_agent.agent as agent_module
+    import fanpulse_agent.tools as tools_module
+
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    calls = []
+
+    def fail_once_then_succeed(team_id):
+        calls.append(team_id)
+        if len(calls) == 1:
+            return ToolResult(
+                "thesportsdb.get_next_team_events",
+                False,
+                {"team_id": team_id, "events": []},
+                "https://www.thesportsdb.com/",
+                "temporary outage",
+                0.2,
+                True,
+            )
+        return tools_module.get_next_team_events_thesportsdb(team_id)
+
+    monkeypatch.setattr(
+        agent_module, "get_next_team_events_thesportsdb", fail_once_then_succeed
+    )
+
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+
+    assert response.requires_action == "approve_digest"
+    assert len(calls) == 2
+    assert response.digest is not None
+    assert [event.entity_name for event in response.digest.events] == ["Los Angeles Lakers"]
+    assert response.digest.unresolved == []
+    with sqlite3.connect(db_path) as connection:
+        fetch_runs = connection.execute(
+            """
+            select success
+            from tool_runs
+            where tool_name = 'thesportsdb.get_next_team_events'
+            order by id
+            """
+        ).fetchall()
+
+    assert fetch_runs == [(0,), (1,)]
+
+
+def test_agent_falls_back_to_web_without_fabricating_event(tmp_path, monkeypatch):
+    import fanpulse_agent.agent as agent_module
+
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+
+    def fail_primary(team_id):
+        return ToolResult(
+            "thesportsdb.get_next_team_events",
+            False,
+            {"team_id": team_id, "events": []},
+            "https://www.thesportsdb.com/",
+            "provider outage",
+            0.2,
+            True,
+        )
+
+    def fail_web(entity_name):
+        return ToolResult(
+            "web.search_event_source",
+            False,
+            {"query": entity_name, "events": []},
+            "https://search.example.com/fanpulse-mock",
+            "no web result",
+            0.2,
+            True,
+        )
+
+    monkeypatch.setattr(agent_module, "get_next_team_events_thesportsdb", fail_primary)
+    monkeypatch.setattr(agent_module, "web_search_event_source", fail_web)
+
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+
+    assert response.requires_action == "approve_digest"
+    assert response.digest is not None
+    assert response.digest.events == []
+    assert response.digest.unresolved == ["Los Angeles Lakers"]
+    with sqlite3.connect(db_path) as connection:
+        tool_names = connection.execute(
+            "select tool_name from tool_runs order by id"
+        ).fetchall()
+
+    assert ("web.search_event_source",) in tool_names
 
 
 def test_agent_persists_distinct_onboarding_users(tmp_path):

@@ -52,6 +52,12 @@ class Event:
     title: str
     event_type: str
     start_time: Optional[str] = None
+    sport_icon: str = ""
+    opponent: Optional[str] = None
+    display_time: Optional[str] = None
+    confidence: float = 0.9
+    mock: bool = False
+    incomplete: bool = False
     entities: List[SportsEntity] = field(default_factory=list)
     source_url: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -70,6 +76,9 @@ class Digest:
     events: List[Event] = field(default_factory=list)
     generated_at: str = field(default_factory=utc_now_iso)
     summary: Optional[str] = None
+    approved: bool = False
+    sent: bool = False
+    unresolved: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)

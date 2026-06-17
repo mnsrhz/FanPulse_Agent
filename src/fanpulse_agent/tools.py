@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from fanpulse_agent.models import Digest, Event, SportsEntity, ToolResult, UserProfile
@@ -8,6 +9,22 @@ API_FOOTBALL_SOURCE_URL = "https://www.api-football.com/"
 WEB_SEARCH_SOURCE_URL = "https://search.example.com/fanpulse-mock"
 WHATSAPP_SOURCE_URL = "https://business.whatsapp.com/"
 FANPULSE_SOURCE_URL = "mock://fanpulse-agent"
+
+SPORT_ICONS = {
+    "american football": "🏈",
+    "basketball": "🏀",
+    "cricket": "🏏",
+    "formula 1": "🏁",
+    "soccer": "⚽",
+    "tennis": "🎾",
+}
+
+TIMEZONE_LABELS = {
+    "-07:00": "PDT",
+    "+01:00": "BST",
+    "+02:00": "CEST",
+    "+05:30": "IST",
+}
 
 
 ENTITY_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -355,6 +372,14 @@ def _lookup_entity(entity_name: str) -> Optional[Dict[str, Any]]:
 
 
 def _make_event(payload: Dict[str, Any]) -> Event:
+    confidence = float(payload.get("confidence", 0.95))
+    mock = bool(payload.get("mock", True))
+    incomplete = bool(payload.get("incomplete", False))
+    opponent = payload.get("opponent") or _opponent_from_title(
+        payload["title"], payload["entity_name"]
+    )
+    display_time = payload.get("display_time") or _display_time(payload.get("start_time"))
+    sport_icon = payload.get("sport_icon") or SPORT_ICONS.get(payload["sport"], "🏟️")
     entity = SportsEntity(
         name=payload["entity_name"],
         entity_type="team" if payload["event_type"] in {"game", "fixture", "match", "team_update"} else "athlete",
@@ -365,12 +390,53 @@ def _make_event(payload: Dict[str, Any]) -> Event:
         title=payload["title"],
         event_type=payload["event_type"],
         start_time=payload["start_time"],
+        sport_icon=sport_icon,
+        opponent=opponent,
+        display_time=display_time,
+        confidence=confidence,
+        mock=mock,
+        incomplete=incomplete,
         entities=[entity],
         source_url=payload["source_url"],
-        metadata={"sport": payload["sport"], "league": payload["league"]},
+        metadata={
+            "sport": payload["sport"],
+            "league": payload["league"],
+            "confidence": confidence,
+            "mock": mock,
+            "incomplete": incomplete,
+            "sport_icon": sport_icon,
+            "opponent": opponent,
+            "display_time": display_time,
+        },
         entity_name=payload["entity_name"],
     )
     return event
+
+
+def _display_time(start_time: Optional[str]) -> Optional[str]:
+    if not start_time:
+        return None
+    try:
+        parsed = datetime.fromisoformat(start_time)
+    except ValueError:
+        return start_time
+    time_label = parsed.strftime("%I:%M %p").lstrip("0")
+    offset = start_time[-6:] if len(start_time) >= 6 else ""
+    zone_label = TIMEZONE_LABELS.get(offset, parsed.tzname() or "")
+    suffix = f" {zone_label}" if zone_label else ""
+    return f"{parsed.strftime('%a, %b')} {parsed.day} · {time_label}{suffix}"
+
+
+def _opponent_from_title(title: str, entity_name: str) -> Optional[str]:
+    marker = " vs "
+    if marker not in title:
+        return None
+    left, right = title.split(marker, 1)
+    if left.strip().lower() == entity_name.strip().lower():
+        return right.strip()
+    if right.strip().lower() == entity_name.strip().lower():
+        return left.strip()
+    return None
 
 
 def _summarize_events(events: Iterable[Event]) -> str:

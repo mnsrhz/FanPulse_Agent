@@ -284,6 +284,20 @@ def render_digest(digest: Digest | None) -> None:
         """,
         unsafe_allow_html=True,
     )
+    if digest.unresolved:
+        unresolved_items = "".join(
+            f'<span class="fp-pill">{escape(item)}</span>' for item in digest.unresolved
+        )
+        st.markdown(
+            f"""
+            <div class="fp-card">
+                <div class="fp-label">Unresolved</div>
+                <div class="fp-subtle">No event source confirmed these preferences.</div>
+                <div>{unresolved_items}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     for event in digest.events:
         render_event_card(event)
 
@@ -291,17 +305,24 @@ def render_digest(digest: Digest | None) -> None:
 def render_event_card(event: Event) -> None:
     sport = event.metadata.get("sport", "sport")
     league = event.metadata.get("league", "league")
-    confidence = event.metadata.get("confidence", 0.9)
-    mock = event.metadata.get("mock", True)
+    confidence = event.confidence
+    mock = event.mock
+    incomplete = event.incomplete
     source = event.source_url or "mock://fanpulse-agent"
+    source_href = escape(source, quote=True)
+    source_text = escape(source)
+    display_time = event.display_time or event.start_time or "Time TBD"
+    opponent = f" · vs {escape(event.opponent)}" if event.opponent else ""
+    status_label = "incomplete" if incomplete else "complete"
+    mode_label = "mock mode" if mock else "live source"
     st.markdown(
         f"""
         <div class="fp-card fp-event">
-            <div class="fp-label">{escape(event.entity_name or "FanPulse")}</div>
+            <div class="fp-label">{escape(event.sport_icon)} {escape(event.entity_name or "FanPulse")}</div>
             <h3>{escape(event.title)}</h3>
-            <div class="fp-event-meta">{escape(event.start_time or "Time TBD")} · {escape(str(league))} · {escape(str(sport))}</div>
-            <div class="fp-event-meta">confidence {confidence:.0%} · {"mock mode" if mock else "live source"}</div>
-            <div class="fp-source">{escape(source)}</div>
+            <div class="fp-event-meta">{escape(display_time)}{opponent} · {escape(str(league))} · {escape(str(sport))}</div>
+            <div class="fp-event-meta">confidence {confidence:.0%} · {mode_label} · {status_label}</div>
+            <div class="fp-source"><a href="{source_href}" target="_blank" rel="noopener noreferrer">{source_text}</a></div>
         </div>
         """,
         unsafe_allow_html=True,
