@@ -30,8 +30,12 @@ class UserProfile:
     timezone: str = "America/Los_Angeles"
     digest_schedule: str = "Friday morning"
     whatsapp_consent: bool = False
+    name_provided: bool = False
+    timezone_provided: bool = False
+    schedule_provided: bool = False
     teams: List[SportsEntity] = field(default_factory=list)
     athletes: List[SportsEntity] = field(default_factory=list)
+    leagues: List[SportsEntity] = field(default_factory=list)
     sports: List[str] = field(default_factory=list)
     clarification_choices: Dict[str, Any] = field(default_factory=dict)
     user_id: Optional[str] = None
@@ -43,6 +47,7 @@ class UserProfile:
         data = asdict(self)
         data["teams"] = [team.to_dict() for team in self.teams]
         data["athletes"] = [athlete.to_dict() for athlete in self.athletes]
+        data["leagues"] = [league.to_dict() for league in self.leagues]
         data["favorite_teams"] = [team.to_dict() for team in self.favorite_teams]
         return data
 

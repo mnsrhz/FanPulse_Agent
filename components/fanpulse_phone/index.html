@@ -1,0 +1,172 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const root = document.getElementById("root");
+      let shouldRefocusInput = true;
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function post(type, payload) {
+        window.parent.postMessage(
+          {
+            isStreamlitMessage: true,
+            type,
+            ...payload,
+          },
+          "*"
+        );
+      }
+
+      function setHeight() {
+        post("streamlit:setFrameHeight", { height: 820 });
+      }
+
+      function emit(value) {
+        post("streamlit:setComponentValue", {
+          dataType: "json",
+          value: {
+            ...value,
+            event_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          },
+        });
+      }
+
+      function focusInputSoon() {
+        if (!shouldRefocusInput) return;
+        window.setTimeout(() => {
+          const input = root.querySelector("[data-fp-input]");
+          if (!input || input.disabled) return;
+          input.focus({ preventScroll: true });
+        }, 0);
+      }
+
+      function appendOptimisticUserMessage(prompt) {
+        const content = root.querySelector("#content");
+        if (!content) return;
+        const message = document.createElement("div");
+        message.className = "msg user";
+        message.setAttribute("data-fp-optimistic", "true");
+        message.innerHTML = escapeHtml(prompt);
+        content.appendChild(message);
+        content.scrollTop = content.scrollHeight;
+      }
+
+      function appendProcessingIndicator(label = "Agent is thinking") {
+        const content = root.querySelector("#content");
+        if (!content) return;
+        if (content.querySelector("[data-fp-processing]")) return;
+        const indicator = document.createElement("div");
+        indicator.className = "msg agent processing";
+        indicator.setAttribute("data-fp-processing", "true");
+        indicator.innerHTML = `
+          <span class="processing-label">${escapeHtml(label)}</span>
+          <span class="processing-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+        `;
+        content.appendChild(indicator);
+        content.scrollTop = content.scrollHeight;
+      }
+
+      function injectProcessingStyles() {
+        if (document.getElementById("fanpulse-processing-styles")) return;
+        const styles = document.createElement("style");
+        styles.id = "fanpulse-processing-styles";
+        styles.textContent = `
+          .processing {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            color: #cfe4ff;
+          }
+          .processing-label {
+            font-size: 13px;
+          }
+          .processing-dots {
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+          }
+          .processing-dots span {
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #8bdcff;
+            opacity: 0.35;
+            animation: fanpulseDotPulse 1s infinite ease-in-out;
+          }
+          .processing-dots span:nth-child(2) { animation-delay: 0.14s; }
+          .processing-dots span:nth-child(3) { animation-delay: 0.28s; }
+          @keyframes fanpulseDotPulse {
+            0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+            40% { transform: translateY(-3px); opacity: 1; }
+          }
+        `;
+        document.head.appendChild(styles);
+      }
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.type !== "streamlit:render") return;
+        injectProcessingStyles();
+        root.innerHTML = data.args.markup || "";
+        const content = root.querySelector("#content");
+        if (content) content.scrollTop = content.scrollHeight;
+        focusInputSoon();
+        setHeight();
+      });
+
+      root.addEventListener("submit", (event) => {
+        const form = event.target.closest("[data-fp-form]");
+        if (!form) return;
+        event.preventDefault();
+        if (form.dataset.fpSubmitting === "true") return;
+        const input = form.querySelector("[data-fp-input]");
+        const prompt = (input && input.value ? input.value : "").trim();
+        if (prompt) {
+          form.dataset.fpSubmitting = "true";
+          appendOptimisticUserMessage(prompt);
+          appendProcessingIndicator();
+          input.value = "";
+          input.disabled = true;
+          const button = form.querySelector("button");
+          if (button) button.disabled = true;
+          emit({ kind: "prompt", prompt });
+        }
+      });
+
+      root.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-fp-action]");
+        if (!button) return;
+        if (button.dataset.fpSubmitting === "true") return;
+        button.dataset.fpSubmitting = "true";
+        root.querySelectorAll("[data-fp-action]").forEach((actionButton) => {
+          actionButton.disabled = true;
+        });
+        appendProcessingIndicator("Agent is working");
+        emit({
+          kind: "action",
+          action: button.dataset.fpAction || "",
+          choice: button.dataset.fpChoice || "",
+        });
+      });
+
+      post("streamlit:componentReady", { apiVersion: 1 });
+      injectProcessingStyles();
+      setHeight();
+      focusInputSoon();
+    </script>
+  </body>
+</html>

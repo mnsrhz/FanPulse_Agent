@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from fanpulse_agent.agent import FanPulseAgent
@@ -18,7 +18,6 @@ def run_weekly_digest_job(
     db = FanPulseDB(db_path)
     db.initialize()
     agent = FanPulseAgent(db)
-    run_key = run_key or _current_run_key()
     summary = {
         "users_processed": 0,
         "digests_created": 0,
@@ -30,7 +29,8 @@ def run_weekly_digest_job(
     for profile in db.load_enrolled_users():
         summary["users_processed"] += 1
         user_id = db.resolve_user_id(profile)
-        if db.has_digest_run(user_id, run_key):
+        profile_run_key = run_key or _current_run_key(profile.digest_schedule)
+        if db.has_digest_run(user_id, profile_run_key):
             summary["skipped"] += 1
             continue
 
@@ -42,7 +42,7 @@ def run_weekly_digest_job(
             continue
 
         summary["digests_created"] += 1
-        db.mark_latest_digest_run(user_id, run_key)
+        db.mark_latest_digest_run(user_id, profile_run_key)
         if getattr(digest, "sent", False):
             summary["sent"] += 1
 
@@ -69,8 +69,14 @@ def _log_failure(db: FanPulseDB, profile: UserProfile, exc: Exception) -> None:
         return
 
 
-def _current_run_key() -> str:
-    iso_year, iso_week, _ = date.today().isocalendar()
+def _current_run_key(schedule: str = "Weekly", now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    normalized = schedule.lower()
+    if "hour" in normalized or "hr" in normalized:
+        return current.strftime("%Y-%m-%dT%H")
+    if normalized == "daily" or "every day" in normalized:
+        return current.strftime("%Y-%m-%d")
+    iso_year, iso_week, _ = current.date().isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
 
 

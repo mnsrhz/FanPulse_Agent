@@ -4,8 +4,9 @@ import sqlite3
 import pytest
 
 from fanpulse_agent.agent import FanPulseAgent
+from fanpulse_agent.agent_planner import AgentPlan, DigestToolPlan
 from fanpulse_agent.database import FanPulseDB
-from fanpulse_agent.models import ToolResult, TraceEntry, UserProfile
+from fanpulse_agent.models import Event, ToolResult, TraceEntry, UserProfile
 from fanpulse_agent.tools import (
     generate_digest,
     get_next_team_events_thesportsdb,
@@ -118,6 +119,30 @@ def test_mock_tools_return_structured_results():
     assert all(result.mock for result in [normalized, team, events, athlete, ranked, digest])
 
 
+def test_rank_events_filters_past_events_from_digest():
+    ranked = rank_events(
+        [
+            Event(
+                title="Past tennis result",
+                event_type="athlete_update",
+                start_time="2020-04-18T13:00:00+01:00",
+                entity_name="Novak Djokovic",
+                metadata={"sport": "tennis"},
+            ),
+            Event(
+                title="Future tennis match",
+                event_type="match",
+                start_time="2999-04-18T13:00:00+01:00",
+                entity_name="Novak Djokovic",
+                metadata={"sport": "tennis"},
+            ),
+        ],
+        UserProfile(name="Mansoor", sports=["tennis"]),
+    )
+
+    assert [event.title for event in ranked.data["events"]] == ["Future tennis match"]
+
+
 def test_mock_event_to_dict_includes_card_shape_fields():
     team = search_team_thesportsdb("Los Angeles Lakers")
     events = get_next_team_events_thesportsdb(team.data["team_id"])
@@ -125,7 +150,7 @@ def test_mock_event_to_dict_includes_card_shape_fields():
     event_payload = events.data["events"][0].to_dict()
 
     assert event_payload["sport_icon"] == "🏀"
-    assert event_payload["display_time"] == "Fri, Jun 19 · 7:30 PM PDT"
+    assert event_payload["display_time"] == "Fri, Jun 19, 2026 · 7:30 PM PDT"
     assert event_payload["confidence"] == pytest.approx(0.95)
     assert event_payload["mock"] is True
     assert event_payload["incomplete"] is False
@@ -139,7 +164,7 @@ def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
     response = agent.handle_user_message(
         "I am Mansoor. I follow the Lakers, Real Madrid, India cricket, "
         "Novak Djokovic and Max Verstappen. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "clarify_ambiguity"
     assert "India" in response.message
@@ -154,6 +179,186 @@ def test_agent_runs_sample_flow_with_approval_gates(tmp_path):
     assert response.digest.sent is True
 
 
+def test_agent_sends_whatsapp_digest_with_card_details(tmp_path, monkeypatch):
+    import fanpulse_agent.tools as tools_module
+
+    captured = {}
+
+    def fake_send(phone_number, digest_text):
+        captured["phone_number"] = phone_number
+        captured["digest_text"] = digest_text
+        return ToolResult(
+            "whatsapp.send_digest",
+            True,
+            {
+                "phone_number": phone_number,
+                "message_preview": digest_text[:160],
+                "sent": True,
+                "delivery_status": "mocked_for_test",
+            },
+            "https://business.whatsapp.com/",
+            None,
+            1.0,
+            True,
+        )
+
+    monkeypatch.setattr(tools_module, "send_whatsapp_digest", fake_send)
+    monkeypatch.setattr("fanpulse_agent.agent.send_whatsapp_digest", fake_send)
+
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp. Use Pacific time."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+
+    response = agent.approve_and_send_digest()
+
+    assert response.requires_action == "complete"
+    text = captured["digest_text"]
+    assert len(text) <= 400
+    assert text.startswith("FanPulse digest")
+    assert "🏀 Los Angeles Lakers vs Golden State Warriors" in text
+    assert "Fri, Jun 19, 2026 · 7:30 PM PDT" in text
+    assert "https://www.thesportsdb.com/" in text
+    assert "League:" not in text
+    assert "confidence" not in text
+
+
+def test_agent_collects_name_and_timezone_before_confirming_preferences(tmp_path):
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+
+    response = agent.handle_user_message(
+        "I follow the Lakers and Novak Djokovic. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+
+    assert response.requires_action == "collect_profile_details"
+    assert "name" in response.message.lower()
+    assert "timezone" in response.message.lower()
+    assert [team.name for team in response.profile.teams] == ["Los Angeles Lakers"]
+
+    response = agent.handle_user_message("I'm Mansoor and I am in Pacific time.")
+
+    assert response.requires_action == "confirm_preferences"
+    assert response.profile.name == "Mansoor"
+    assert response.profile.name_provided is True
+    assert response.profile.timezone == "America/Los_Angeles"
+    assert response.profile.timezone_provided is True
+    assert [team.name for team in response.profile.teams] == ["Los Angeles Lakers"]
+    assert [athlete.name for athlete in response.profile.athletes] == ["Novak Djokovic"]
+
+
+def test_agent_uses_llm_planner_for_profile_followup_message(tmp_path, monkeypatch):
+    import fanpulse_agent.agent as agent_module
+
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+
+    def planned_next_action(**kwargs):
+        return AgentPlan(
+            next_action="collect_profile_details",
+            assistant_message="What should I call you, and what timezone should anchor the digest?",
+            reasoning="The profile is missing name and timezone.",
+            tool_plan=[],
+        )
+
+    monkeypatch.setattr(agent_module, "plan_next_agent_action", planned_next_action)
+
+    response = agent.handle_user_message(
+        "I follow the Lakers and Novak Djokovic. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+
+    assert response.requires_action == "collect_profile_details"
+    assert response.message == (
+        "What should I call you, and what timezone should anchor the digest?"
+    )
+    assert response.trace[-1].step == "llm_plan_next_action"
+    assert response.trace[-1].metadata["next_action"] == "collect_profile_details"
+
+
+def test_agent_logs_llm_digest_tool_plan_before_tool_execution(tmp_path, monkeypatch):
+    import fanpulse_agent.agent as agent_module
+
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+
+    monkeypatch.setattr(
+        agent_module,
+        "plan_digest_tool_calls",
+        lambda profile: DigestToolPlan(
+            tools=[
+                "sportsdb.search_team",
+                "sportsdb.get_next_team_events",
+                "digest.generate",
+            ],
+            reasoning="Use team schedule tools before generating the digest.",
+        ),
+    )
+
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp. Use Pacific time."
+    )
+    assert response.requires_action == "confirm_preferences"
+
+    response = agent.confirm_preferences()
+
+    assert response.requires_action == "approve_digest"
+    plan_trace = next(
+        entry for entry in response.trace if entry.step == "llm_plan_tool_calls"
+    )
+    assert plan_trace.metadata["tools"] == [
+        "sportsdb.search_team",
+        "sportsdb.get_next_team_events",
+        "digest.generate",
+    ]
+
+
+def test_agent_understands_natural_name_timezone_followup(tmp_path):
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+
+    response = agent.handle_user_message(
+        "I follow the Lakers. Send the digest to 415-555-0123 on WhatsApp."
+    )
+    assert response.requires_action == "collect_profile_details"
+
+    response = agent.handle_user_message("Mansoor, California, every 1 hour")
+
+    assert response.requires_action == "confirm_preferences"
+    assert response.profile.name == "Mansoor"
+    assert response.profile.name_provided is True
+    assert response.profile.timezone == "America/Los_Angeles"
+    assert response.profile.timezone_provided is True
+    assert response.profile.digest_schedule == "Every 1 hour"
+    assert response.profile.schedule_provided is True
+    assert [team.name for team in response.profile.teams] == ["Los Angeles Lakers"]
+
+
+def test_agent_collects_frequency_before_confirming_preferences(tmp_path):
+    db = FanPulseDB(str(tmp_path / "agent.db"))
+    agent = FanPulseAgent(db)
+
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers. Send it to +14155550123 on WhatsApp. Use Pacific time."
+    )
+
+    assert response.requires_action == "collect_profile_details"
+    assert "frequency" in response.message.lower()
+
+    response = agent.handle_user_message("Every 1 hour")
+
+    assert response.requires_action == "confirm_preferences"
+    assert response.profile.digest_schedule == "Every 1 hour"
+    assert response.profile.schedule_provided is True
+
+
 def test_agent_persists_approved_sent_and_unresolved_digest_state(tmp_path):
     db_path = tmp_path / "agent.db"
     db = FanPulseDB(str(db_path))
@@ -161,7 +366,7 @@ def test_agent_persists_approved_sent_and_unresolved_digest_state(tmp_path):
 
     response = agent.handle_user_message(
         "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "confirm_preferences"
     response = agent.confirm_preferences()
@@ -209,7 +414,7 @@ def test_agent_retries_failed_primary_team_event_fetch_once(tmp_path, monkeypatc
 
     response = agent.handle_user_message(
         "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "confirm_preferences"
     response = agent.confirm_preferences()
@@ -266,7 +471,7 @@ def test_agent_falls_back_to_web_without_fabricating_event(tmp_path, monkeypatch
 
     response = agent.handle_user_message(
         "I am Mansoor. I follow the Lakers. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "confirm_preferences"
     response = agent.confirm_preferences()
@@ -290,7 +495,7 @@ def test_agent_persists_distinct_onboarding_users(tmp_path):
     alice = FanPulseAgent(db)
     response = alice.handle_user_message(
         "I am Alice. I follow the Lakers. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "confirm_preferences"
     response = alice.confirm_preferences()
@@ -299,7 +504,7 @@ def test_agent_persists_distinct_onboarding_users(tmp_path):
     bob = FanPulseAgent(db)
     response = bob.handle_user_message(
         "I am Bob. I follow the 49ers. Send my digest every Friday morning "
-        "to +14155550124 on WhatsApp."
+        "to +14155550124 on WhatsApp. Use Eastern time."
     )
     assert response.requires_action == "confirm_preferences"
     response = bob.confirm_preferences()
@@ -323,7 +528,7 @@ def test_agent_approval_is_idempotent(tmp_path):
     response = agent.handle_user_message(
         "I am Mansoor. I follow the Lakers, Real Madrid, India cricket, "
         "Novak Djokovic and Max Verstappen. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     assert response.requires_action == "clarify_ambiguity"
     response = agent.resolve_ambiguity("India men's national cricket team")
@@ -355,7 +560,7 @@ def test_agent_accepts_contact_update_after_digest_approval_block(tmp_path):
     db = FanPulseDB(str(db_path))
     agent = FanPulseAgent(db)
     response = agent.handle_user_message(
-        "I am Mansoor. I follow the Lakers and Novak Djokovic. Send my digest every Friday morning."
+        "I am Mansoor. I follow the Lakers and Novak Djokovic. Send my digest every Friday morning. Use Pacific time."
     )
     assert response.requires_action == "confirm_preferences"
     response = agent.confirm_preferences()
@@ -364,7 +569,7 @@ def test_agent_accepts_contact_update_after_digest_approval_block(tmp_path):
     original_digest = response.digest
 
     blocked = agent.approve_and_send_digest()
-    assert blocked.requires_action == "confirm_preferences"
+    assert blocked.requires_action == "collect_contact"
     assert "phone number" in blocked.message
 
     updated = agent.handle_user_message("Send it to +14155550123 on WhatsApp.")
@@ -379,6 +584,64 @@ def test_agent_accepts_contact_update_after_digest_approval_block(tmp_path):
     assert sent.digest.sent is True
 
 
+def test_agent_collects_contact_without_reconfirming_preferences(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers and Novak Djokovic. Send my digest every Friday morning. Use Pacific time."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+    original_digest = response.digest
+
+    blocked = agent.approve_and_send_digest()
+
+    assert blocked.requires_action == "collect_contact"
+    assert blocked.digest is original_digest
+    assert "phone number" in blocked.message
+
+
+def test_agent_does_not_offer_approval_after_incomplete_contact_update(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    agent.handle_user_message("I am Mansoor. I follow the Lakers. Use Pacific time.")
+    response = agent.confirm_preferences()
+    original_digest = response.digest
+
+    blocked = agent.approve_and_send_digest()
+    assert blocked.requires_action == "collect_contact"
+
+    update = agent.handle_user_message("Yes, send it on WhatsApp.")
+
+    assert update.requires_action == "collect_contact"
+    assert update.digest is original_digest
+    assert update.profile.whatsapp_consent is True
+    assert update.profile.phone_number is None
+    assert "phone number" in update.message
+
+
+def test_agent_treats_phone_reply_as_whatsapp_contact_in_pending_send_flow(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    agent.handle_user_message("I am Mansoor. I follow the Lakers. Use Pacific time.")
+    response = agent.confirm_preferences()
+    original_digest = response.digest
+
+    blocked = agent.approve_and_send_digest()
+    assert blocked.requires_action == "collect_contact"
+
+    update = agent.handle_user_message("415-555-0123")
+
+    assert update.requires_action == "approve_digest"
+    assert update.digest is original_digest
+    assert update.profile.phone_number == "+14155550123"
+    assert update.profile.whatsapp_consent is True
+
+
 def test_weekly_job_runs_for_enrolled_user(tmp_path):
     from weekly_digest_job import run_weekly_digest_job
 
@@ -387,7 +650,7 @@ def test_weekly_job_runs_for_enrolled_user(tmp_path):
     agent = FanPulseAgent(db)
     agent.handle_user_message(
         "I am Mansoor. I follow the Lakers and Real Madrid. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     agent.confirm_preferences()
 
@@ -405,7 +668,7 @@ def test_weekly_job_is_idempotent_for_run_key(tmp_path):
     agent = FanPulseAgent(db)
     agent.handle_user_message(
         "I am Mansoor. I follow the Lakers and Real Madrid. Send my digest every Friday morning "
-        "to +14155550123 on WhatsApp."
+        "to +14155550123 on WhatsApp. Use Pacific time."
     )
     agent.confirm_preferences()
 
@@ -427,6 +690,19 @@ def test_weekly_job_is_idempotent_for_run_key(tmp_path):
 
     assert digest_history_rows == 1
     assert whatsapp_runs == 1
+
+
+def test_weekly_job_run_key_respects_hourly_frequency():
+    from datetime import datetime, timezone
+
+    from weekly_digest_job import _current_run_key
+
+    first_hour = datetime(2026, 6, 17, 18, 30, tzinfo=timezone.utc)
+    next_hour = datetime(2026, 6, 17, 19, 0, tzinfo=timezone.utc)
+
+    assert _current_run_key("Every 1 hour", first_hour) == "2026-06-17T18"
+    assert _current_run_key("Every 1 hour", next_hour) == "2026-06-17T19"
+    assert _current_run_key("Friday morning", first_hour) == "2026-W25"
 
 
 def test_weekly_job_logs_failure_for_external_user_id(tmp_path, monkeypatch):

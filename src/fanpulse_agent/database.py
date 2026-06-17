@@ -154,7 +154,7 @@ class FanPulseDB:
             )
 
             connection.execute("delete from sports_entities where user_id = ?", (user_id,))
-            for entity in [*profile.teams, *profile.athletes]:
+            for entity in [*profile.teams, *profile.athletes, *profile.leagues]:
                 connection.execute(
                     """
                     insert into sports_entities (
@@ -336,7 +336,7 @@ class FanPulseDB:
         self, connection: sqlite3.Connection, row: sqlite3.Row
     ) -> UserProfile:
         user_id = int(row[0])
-        teams, athletes = self._load_entities(connection, user_id)
+        teams, athletes, leagues = self._load_entities(connection, user_id)
         return UserProfile(
             user_id=str(row[1] or user_id),
             name=row[2],
@@ -344,8 +344,11 @@ class FanPulseDB:
             timezone=row[4],
             digest_schedule=row[5],
             whatsapp_consent=bool(row[6]),
+            name_provided=True,
+            timezone_provided=True,
             teams=teams,
             athletes=athletes,
+            leagues=leagues,
             sports=self._from_json(row[8], []),
             clarification_choices=self._from_json(row[9], {}),
             favorite_teams=teams,
@@ -355,7 +358,7 @@ class FanPulseDB:
 
     def _load_entities(
         self, connection: sqlite3.Connection, user_id: int
-    ) -> tuple[List[SportsEntity], List[SportsEntity]]:
+    ) -> tuple[List[SportsEntity], List[SportsEntity], List[SportsEntity]]:
         rows = connection.execute(
             """
             select name, entity_type, sport, source_text, confidence,
@@ -368,6 +371,7 @@ class FanPulseDB:
         ).fetchall()
         teams: List[SportsEntity] = []
         athletes: List[SportsEntity] = []
+        leagues: List[SportsEntity] = []
         for row in rows:
             entity = SportsEntity(
                 name=row[0],
@@ -382,9 +386,11 @@ class FanPulseDB:
             )
             if entity.entity_type == "athlete":
                 athletes.append(entity)
+            elif entity.entity_type == "league":
+                leagues.append(entity)
             else:
                 teams.append(entity)
-        return teams, athletes
+        return teams, athletes, leagues
 
     def _to_json(self, value: Any) -> str:
         return json.dumps(self._as_payload(value), sort_keys=True)

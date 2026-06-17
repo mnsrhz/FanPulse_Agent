@@ -1,18 +1,34 @@
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import List, Optional
 
+from fanpulse_agent.agent_planner import plan_digest_tool_calls, plan_next_agent_action
 from fanpulse_agent.database import FanPulseDB
 from fanpulse_agent.entity_extraction import extract_profile_from_text
 from fanpulse_agent.models import Digest, Event, SportsEntity, ToolResult, TraceEntry, UserProfile
 from fanpulse_agent.tools import (
+    discover_official_schedule_sources,
+    extract_official_schedule_events,
     generate_digest,
+    get_next_league_events_thesportsdb,
+    get_next_league_fixtures_apifootball,
+    get_next_races_apiformula1,
+    get_team_games_apibasketball,
     get_next_team_events_thesportsdb,
     normalize_sports_entity,
     rank_events,
+    search_driver_apiformula1,
+    search_sports_events_serpapi,
     search_soccer_fixture_apifootball,
+    search_league_thesportsdb,
+    search_league_apifootball,
+    search_player_thesportsdb,
+    search_team_apibasketball,
     search_team_thesportsdb,
     send_whatsapp_digest,
+    validate_official_schedule_events,
     web_search_event_source,
+    is_upcoming_event,
 )
 
 
@@ -37,7 +53,13 @@ class FanPulseAgent:
 
     def handle_user_message(self, text: str) -> AgentResponse:
         profile, ambiguous = extract_profile_from_text(text)
+        if self.current_profile is not None and self.current_digest is None:
+            self._merge_profile_update(profile)
+            return self._planned_next_response(text)
+
         if self.current_profile is not None and self.current_digest is not None:
+            if profile.phone_number and not self._is_whatsapp_refusal(text):
+                profile.whatsapp_consent = True
             self._merge_profile_update(profile)
             self._trace(
                 "update_contact",
@@ -50,10 +72,7 @@ class FanPulseAgent:
             )
             if self.current_user_id is not None:
                 self.db.save_user_preferences(self.current_profile)
-            return self._response(
-                "Thanks, I updated your WhatsApp details. Please approve the digest when ready.",
-                "approve_digest",
-            )
+            return self._planned_next_response(text)
 
         self.current_profile = profile
         self.current_digest = None
@@ -70,23 +89,25 @@ class FanPulseAgent:
             },
         )
 
-        if ambiguous:
-            names = ", ".join(entity.name for entity in ambiguous)
-            return self._response(
-                f"Please clarify this preference before I continue: {names}.",
-                "clarify_ambiguity",
-            )
-        return self._confirm_preferences_response()
+        return self._planned_next_response(text)
 
     def _merge_profile_update(self, update: UserProfile) -> None:
         profile = self._require_profile()
         if update.name and update.name != "Fan":
             profile.name = update.name
+        if update.name_provided:
+            profile.name_provided = True
         if update.phone_number:
             profile.phone_number = update.phone_number
-        if update.timezone and update.timezone != "America/Los_Angeles":
+        if update.timezone_provided:
             profile.timezone = update.timezone
-        if update.digest_schedule and update.digest_schedule != "Friday morning":
+            profile.timezone_provided = True
+        elif update.timezone and update.timezone != "America/Los_Angeles":
+            profile.timezone = update.timezone
+        if update.schedule_provided:
+            profile.digest_schedule = update.digest_schedule
+            profile.schedule_provided = True
+        elif update.digest_schedule and update.digest_schedule != "Friday morning":
             profile.digest_schedule = update.digest_schedule
         if update.whatsapp_consent:
             profile.whatsapp_consent = True
@@ -95,6 +116,8 @@ class FanPulseAgent:
             profile.favorite_teams = update.teams
         if update.athletes:
             profile.athletes = update.athletes
+        if update.leagues:
+            profile.leagues = update.leagues
         if update.sports:
             profile.sports = update.sports
             profile.favorite_sports = update.sports
@@ -164,7 +187,7 @@ class FanPulseAgent:
             digest.approved = True
             return self._response("Digest already sent.", "complete")
 
-        if not profile.whatsapp_consent or not profile.phone_number:
+        if not self._profile_can_receive_whatsapp(profile):
             self._trace(
                 "send_blocked",
                 "WhatsApp send blocked because consent or phone number is missing.",
@@ -174,10 +197,7 @@ class FanPulseAgent:
                 },
                 persist=bool(self.current_user_id),
             )
-            return self._response(
-                "I need WhatsApp consent and a phone number before sending.",
-                "confirm_preferences",
-            )
+            return self._missing_contact_response()
 
         result = self._log_tool(
             send_whatsapp_digest(profile.phone_number, self._digest_text(digest))
@@ -240,12 +260,16 @@ class FanPulseAgent:
         return digest
 
     def _collect_events(self, profile: UserProfile) -> tuple[List[Event], List[str]]:
+        tool_plan = plan_digest_tool_calls(profile)
         self._trace(
-            "plan_tool_calls",
-            "Planned source lookups for teams and athletes.",
+            "llm_plan_tool_calls",
+            "LLM planned source lookups for teams and athletes.",
             metadata={
+                "tools": tool_plan.tools,
+                "reasoning": tool_plan.reasoning,
                 "teams": [team.name for team in profile.teams],
                 "athletes": [athlete.name for athlete in profile.athletes],
+                "leagues": [league.name for league in profile.leagues],
             },
             persist=bool(self.current_user_id),
         )
@@ -264,25 +288,140 @@ class FanPulseAgent:
 
             team_events = self._collect_team_events(canonical_name, sport)
 
-            if team_events:
-                events.extend(team_events)
+            future_team_events = self._future_events(team_events)
+            next_event = self._next_event(future_team_events)
+            if next_event:
+                events.append(next_event)
             else:
                 unresolved.append(team.name)
 
         for athlete in profile.athletes:
-            normalized = self._log_tool(normalize_sports_entity(athlete.name))
-            canonical_name = (
-                normalized.data["canonical_name"] if normalized.success else athlete.name
+            official_events = self._official_schedule_events(
+                athlete.name, athlete.sport, athlete.entity_type or "athlete"
             )
-            athlete_result = self._log_tool(web_search_event_source(canonical_name))
-            if athlete_result.success:
-                events.extend(athlete_result.data["events"])
+            next_event = self._next_event(official_events)
+            if next_event:
+                events.append(next_event)
+                continue
+
+            if athlete.sport == "formula 1":
+                driver_result = self._log_tool(search_driver_apiformula1(athlete.name))
+                race_result = self._log_tool(get_next_races_apiformula1(athlete.name))
+                race_events = (
+                    self._future_events(race_result.data["events"])
+                    if race_result.success
+                    else []
+                )
+                next_event = self._next_event(race_events)
+                if next_event:
+                    events.append(next_event)
+                    continue
+                serp_result = self._log_tool(
+                    search_sports_events_serpapi(athlete.name, athlete.sport)
+                )
+                serp_events = (
+                    self._future_events(serp_result.data["events"])
+                    if serp_result.success
+                    else []
+                )
+                next_event = self._next_event(serp_events)
+                if next_event:
+                    events.append(next_event)
+                    continue
+
+            athlete_result = self._log_tool(search_player_thesportsdb(athlete.name))
+            athlete_events = (
+                self._future_events(athlete_result.data["events"])
+                if athlete_result.success
+                else []
+            )
+            next_event = self._next_event(athlete_events)
+            if next_event:
+                events.append(next_event)
             else:
-                unresolved.append(athlete.name)
+                fallback_result = self._log_tool(web_search_event_source(athlete.name))
+                fallback_events = (
+                    self._future_events(fallback_result.data["events"])
+                    if fallback_result.success
+                    else []
+                )
+                next_event = self._next_event(fallback_events)
+                if next_event:
+                    events.append(next_event)
+                else:
+                    unresolved.append(athlete.name)
+
+        for league in profile.leagues:
+            official_events = self._official_schedule_events(
+                league.name, league.sport, league.entity_type or "league"
+            )
+            next_event = self._next_event(official_events)
+            if next_event:
+                events.append(next_event)
+                continue
+
+            if league.sport == "soccer":
+                api_league = self._log_tool(search_league_apifootball(league.name))
+                if api_league.success:
+                    league.external_id = str(api_league.data["league_id"])
+                    api_fixtures = self._log_tool(
+                        get_next_league_fixtures_apifootball(
+                            api_league.data["league_id"],
+                            api_league.data["name"],
+                        )
+                    )
+                    api_events = (
+                        self._future_events(api_fixtures.data["events"])
+                        if api_fixtures.success
+                        else []
+                    )
+                    next_event = self._next_event(api_events)
+                    if next_event:
+                        events.append(next_event)
+                        continue
+
+            league_result = self._log_tool(search_league_thesportsdb(league.name))
+            if not league_result.success:
+                unresolved.append(league.name)
+                continue
+            league.external_id = league_result.data["league_id"]
+            events_result = self._log_tool(
+                get_next_league_events_thesportsdb(
+                    league_result.data["league_id"],
+                    league_result.data["name"],
+                )
+            )
+            league_events = (
+                self._future_events(events_result.data["events"])
+                if events_result.success
+                else []
+            )
+            next_event = self._next_event(league_events)
+            if next_event:
+                events.append(next_event)
+            else:
+                unresolved.append(league.name)
+
+        if not profile.teams and not profile.athletes and not profile.leagues:
+            for sport in profile.sports:
+                official_events = self._official_schedule_events(
+                    sport.title() if sport.lower() != "formula 1" else "Formula 1",
+                    sport,
+                    "sport",
+                )
+                next_event = self._next_event(official_events)
+                if next_event:
+                    events.append(next_event)
+                else:
+                    unresolved.append(sport)
 
         return events, unresolved
 
     def _collect_team_events(self, canonical_name: str, sport: str) -> List[Event]:
+        official_events = self._official_schedule_events(canonical_name, sport, "team")
+        if official_events:
+            return official_events
+
         if sport == "soccer":
             soccer_result = self._log_tool(search_soccer_fixture_apifootball(canonical_name))
             if soccer_result.success:
@@ -291,6 +430,28 @@ class FanPulseAgent:
             sportsdb_events = self._collect_sportsdb_team_events(canonical_name)
             if sportsdb_events:
                 return sportsdb_events
+            return self._web_fallback_events(canonical_name)
+
+        if sport == "basketball":
+            team_result = self._log_tool(search_team_apibasketball(canonical_name))
+            if team_result.success:
+                games_result = self._log_tool(
+                    get_team_games_apibasketball(
+                        team_result.data["team_id"],
+                        team_result.data["name"],
+                    )
+                )
+                if games_result.success:
+                    return games_result.data["events"]
+
+            sportsdb_events = self._collect_sportsdb_team_events(canonical_name)
+            if sportsdb_events:
+                return sportsdb_events
+            serp_result = self._log_tool(
+                search_sports_events_serpapi(canonical_name, sport)
+            )
+            if serp_result.success:
+                return serp_result.data["events"]
             return self._web_fallback_events(canonical_name)
 
         sportsdb_events = self._collect_sportsdb_team_events(canonical_name)
@@ -320,11 +481,186 @@ class FanPulseAgent:
             return fallback_result.data["events"]
         return []
 
-    def _confirm_preferences_response(self) -> AgentResponse:
+    def _official_schedule_events(
+        self, entity_name: str, sport: str, entity_type: str
+    ) -> List[Event]:
+        sources_result = self._log_tool(
+            discover_official_schedule_sources(entity_name, sport, entity_type)
+        )
+        if not sources_result.success:
+            return []
+
+        events_result = self._log_tool(
+            extract_official_schedule_events(
+                entity_name,
+                sport,
+                sources_result.data.get("sources", []),
+            )
+        )
+        if not events_result.success:
+            return []
+
+        validated_result = self._log_tool(
+            validate_official_schedule_events(events_result.data.get("events", []))
+        )
+        if not validated_result.success:
+            return []
+        return validated_result.data["events"]
+
+    def _future_events(self, events: List[Event]) -> List[Event]:
+        return [event for event in events if is_upcoming_event(event)]
+
+    def _next_event(self, events: List[Event]) -> Optional[Event]:
+        if not events:
+            return None
+        return sorted(events, key=self._event_sort_key)[0]
+
+    def _event_sort_key(self, event: Event) -> tuple:
+        if not event.start_time:
+            return (date.max, event.title)
+        try:
+            event_date = datetime.fromisoformat(event.start_time).date()
+        except ValueError:
+            try:
+                event_date = date.fromisoformat(event.start_time[:10])
+            except ValueError:
+                event_date = date.max
+        return (event_date, event.start_time or "", event.title)
+
+    def _planned_next_response(self, user_message: str) -> AgentResponse:
+        profile = self._require_profile()
+        missing_fields = self._missing_profile_fields(profile)
+        plan = plan_next_agent_action(
+            user_message=user_message,
+            profile=profile,
+            has_pending_digest=self.current_digest is not None,
+            ambiguous_entities=self._ambiguous_entities,
+            missing_fields=missing_fields,
+            contact_ready=self._profile_can_receive_whatsapp(profile),
+        )
+        self._trace(
+            "llm_plan_next_action",
+            "LLM selected the next safe conversational action.",
+            metadata={
+                "next_action": plan.next_action,
+                "reasoning": plan.reasoning,
+                "tool_plan": plan.tool_plan,
+                "missing_fields": list(missing_fields),
+            },
+            persist=bool(self.current_user_id),
+        )
+
+        if plan.next_action == "collect_profile_details":
+            return self._profile_details_response(plan.assistant_message)
+        if plan.next_action == "collect_preferences":
+            return self._collect_preferences_response(plan.assistant_message)
+        if plan.next_action == "clarify_ambiguity":
+            return self._clarify_ambiguity_response(plan.assistant_message)
+        if plan.next_action == "collect_contact":
+            return self._missing_contact_response(plan.assistant_message)
+        if plan.next_action == "approve_digest":
+            return self._approval_prompt_response(plan.assistant_message)
+        if plan.next_action == "complete":
+            return self._response(plan.assistant_message or "Done.", "complete")
+        return self._confirm_preferences_response(plan.assistant_message)
+
+    def _confirm_preferences_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
         profile = self._require_profile()
         return self._response(
-            f"Please confirm preferences for {profile.name} before I build the digest.",
+            message_override
+            or f"Please confirm preferences for {profile.name} before I build the digest.",
             "confirm_preferences",
+        )
+
+    def _collect_preferences_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
+        return self._response(
+            message_override
+            or (
+                "Which teams, athletes, or sports should I track in your weekly digest?"
+            ),
+            "collect_preferences",
+        )
+
+    def _clarify_ambiguity_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
+        names = ", ".join(entity.name for entity in self._ambiguous_entities)
+        return self._response(
+            message_override
+            or f"Please clarify this preference before I continue: {names}.",
+            "clarify_ambiguity",
+        )
+
+    def _missing_profile_fields(self, profile: UserProfile) -> list[str]:
+        missing = []
+        if not profile.name_provided or profile.name == "Fan":
+            missing.append("name")
+        if not profile.timezone_provided:
+            missing.append("timezone")
+        if not profile.schedule_provided:
+            missing.append("frequency")
+        return missing
+
+    def _profile_details_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
+        profile = self._require_profile()
+        missing = self._missing_profile_fields(profile)
+        if missing == ["name"]:
+            message = "What name should I save for this FanPulse digest?"
+        elif missing == ["timezone"]:
+            message = (
+                f"Thanks, {profile.name}. What timezone should I use for your digest schedule?"
+            )
+        elif missing == ["frequency"]:
+            message = "What update frequency should I use for sports notifications?"
+        else:
+            message = (
+                "Before I save your preferences, what name, timezone, and update "
+                "frequency should I use for your digest?"
+            )
+        return self._response(message_override or message, "collect_profile_details")
+
+    def _profile_can_receive_whatsapp(self, profile: UserProfile) -> bool:
+        return bool(profile.whatsapp_consent and profile.phone_number)
+
+    def _is_whatsapp_refusal(self, text: str) -> bool:
+        normalized = text.lower()
+        refusal_markers = (
+            "do not send",
+            "don't send",
+            "no whatsapp",
+            "not whatsapp",
+        )
+        return "whatsapp" in normalized and any(
+            marker in normalized for marker in refusal_markers
+        )
+
+    def _missing_contact_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
+        profile = self._require_profile()
+        if profile.phone_number and not profile.whatsapp_consent:
+            message = (
+                "I have your phone number. Please confirm you want this sent on WhatsApp."
+            )
+        elif profile.whatsapp_consent and not profile.phone_number:
+            message = "I have WhatsApp consent. Please share the phone number to send it to."
+        else:
+            message = "I need WhatsApp consent and a phone number before sending."
+        return self._response(message_override or message, "collect_contact")
+
+    def _approval_prompt_response(
+        self, message_override: Optional[str] = None
+    ) -> AgentResponse:
+        return self._response(
+            message_override
+            or "Thanks, I updated your WhatsApp details. Please approve the digest when ready.",
+            "approve_digest",
         )
 
     def _response(self, message: str, requires_action: str) -> AgentResponse:
@@ -384,5 +720,54 @@ class FanPulseAgent:
         return self.current_digest
 
     def _digest_text(self, digest: Digest) -> str:
-        event_lines = [f"- {event.title}" for event in digest.events]
-        return "\n".join([digest.title, digest.summary or "", *event_lines])
+        lines = ["FanPulse digest"]
+        if digest.events:
+            for event in digest.events:
+                candidate = self._compact_whatsapp_event_line(event)
+                candidate_text = "\n".join([*lines, candidate])
+                if len(candidate_text) <= 360:
+                    lines.append(candidate)
+                else:
+                    break
+            hidden_count = max(0, len(digest.events) - (len(lines) - 1))
+            if hidden_count:
+                lines.append(f"+{hidden_count} more in app")
+        else:
+            lines.append("No confirmed upcoming events.")
+
+        if digest.unresolved:
+            unresolved = ", ".join(digest.unresolved[:2])
+            candidate = f"Review: {unresolved}"
+            if len("\n".join([*lines, candidate])) <= 380:
+                lines.append(candidate)
+
+        text = "\n".join(lines)
+        if len(text) <= 400:
+            return text
+        return text[:397].rstrip() + "..."
+
+    def _compact_whatsapp_event_line(self, event: Event) -> str:
+        icon = event.sport_icon or "•"
+        display_time = event.display_time or event.start_time or "Time TBD"
+        source = event.source_url or "mock://fanpulse-agent"
+        return f"{icon} {event.title} — {display_time}\n{source}"
+
+    def _whatsapp_event_lines(self, index: int, event: Event) -> List[str]:
+        league = event.metadata.get("league") or event.entities[0].league if event.entities else ""
+        sport = event.metadata.get("sport") or event.entities[0].sport if event.entities else ""
+        display_time = event.display_time or event.start_time or "Time TBD"
+        source = event.source_url or "mock://fanpulse-agent"
+        mode_label = "mock mode" if event.mock else "live source"
+        status_label = "incomplete" if event.incomplete else "complete"
+        opponent = f" vs {event.opponent}" if event.opponent else ""
+        icon = event.sport_icon or "•"
+        return [
+            "",
+            f"{index}. {icon} {event.title}",
+            f"   Time: {display_time}",
+            f"   Team/Athlete: {event.entity_name or 'FanPulse'}{opponent}",
+            f"   League: {league or 'Unknown'}",
+            f"   Sport: {sport or 'sport'}",
+            f"   Source: {source}",
+            f"   confidence {event.confidence:.0%} · {mode_label} · {status_label}",
+        ]
