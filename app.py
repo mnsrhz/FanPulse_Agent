@@ -174,6 +174,34 @@ def apply_styles() -> None:
             border-radius: 0 0 26px 26px;
             padding: 18px;
         }
+        .fp-chat-content {
+            min-height: 430px;
+            max-height: 560px;
+            overflow-y: auto;
+            padding: 0 0 0.5rem;
+        }
+        .fp-msg {
+            max-width: 86%;
+            padding: 12px 14px;
+            border-radius: 17px;
+            margin: 10px 0;
+            line-height: 1.45;
+            font-size: 14px;
+            color: #f3f7ff !important;
+            overflow-wrap: anywhere;
+        }
+        .fp-msg * {
+            color: inherit !important;
+        }
+        .fp-msg-agent {
+            background: #11243d;
+            border-bottom-left-radius: 5px;
+        }
+        .fp-msg-user {
+            background: linear-gradient(135deg, var(--fp-blue), var(--fp-purple));
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
         .fp-event {
             display: grid;
             grid-template-columns: 42px 1fr;
@@ -217,17 +245,10 @@ def apply_styles() -> None:
             border-color: rgba(56, 189, 248, 0.72);
             color: #ffffff;
         }
-        [data-testid="stChatMessage"] {
-            max-width: 86%;
-            border: 0;
-            border-radius: 17px;
-            background: #11243d;
-            margin: 0.6rem 0;
-            padding: 0.25rem 0.4rem;
-        }
-        [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-            margin-left: auto;
-            background: linear-gradient(135deg, var(--fp-blue), var(--fp-purple));
+        [data-testid="stChatInput"] textarea {
+            background: #071321 !important;
+            color: var(--fp-text) !important;
+            border-color: var(--fp-line) !important;
         }
         @media (max-width: 950px) {
             .fp-title { font-size: 2.65rem; }
@@ -428,6 +449,20 @@ def render_event_card(event: Event) -> None:
     )
 
 
+def render_chat_transcript(messages: list[dict[str, str]]) -> None:
+    rendered = []
+    for message in messages:
+        role = message.get("role", "assistant")
+        bubble_class = "fp-msg-user" if role == "user" else "fp-msg-agent"
+        rendered.append(
+            f'<div class="fp-msg {bubble_class}">{escape(message.get("content", ""))}</div>'
+        )
+    st.markdown(
+        f'<div class="fp-chat-content">{"".join(rendered)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_actions(response: AgentResponse | None) -> None:
     if response is None:
         return
@@ -568,10 +603,7 @@ with right:
         unsafe_allow_html=True,
     )
     st.markdown('<div class="fp-phone-body">', unsafe_allow_html=True)
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-
+    render_chat_transcript(st.session_state.messages)
     render_actions(last_response)
     prompt = st.chat_input("Tell FanPulse who you follow...")
     if prompt:
