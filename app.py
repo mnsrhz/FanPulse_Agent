@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from html import escape
+from pathlib import Path
 from typing import Any, Iterable
 
 import streamlit as st
+
+SRC_DIR = Path(__file__).resolve().parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from fanpulse_agent.agent import AgentResponse, FanPulseAgent
 from fanpulse_agent.database import FanPulseDB
