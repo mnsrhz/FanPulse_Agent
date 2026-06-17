@@ -37,6 +37,24 @@ class FanPulseAgent:
 
     def handle_user_message(self, text: str) -> AgentResponse:
         profile, ambiguous = extract_profile_from_text(text)
+        if self.current_profile is not None and self.current_digest is not None:
+            self._merge_profile_update(profile)
+            self._trace(
+                "update_contact",
+                "Updated contact details without discarding the pending digest.",
+                metadata={
+                    "has_phone": bool(self.current_profile.phone_number),
+                    "has_consent": self.current_profile.whatsapp_consent,
+                },
+                persist=bool(self.current_user_id),
+            )
+            if self.current_user_id is not None:
+                self.db.save_user_preferences(self.current_profile)
+            return self._response(
+                "Thanks, I updated your WhatsApp details. Please approve the digest when ready.",
+                "approve_digest",
+            )
+
         self.current_profile = profile
         self.current_digest = None
         self.current_user_id = None
@@ -59,6 +77,29 @@ class FanPulseAgent:
                 "clarify_ambiguity",
             )
         return self._confirm_preferences_response()
+
+    def _merge_profile_update(self, update: UserProfile) -> None:
+        profile = self._require_profile()
+        if update.name and update.name != "Fan":
+            profile.name = update.name
+        if update.phone_number:
+            profile.phone_number = update.phone_number
+        if update.timezone and update.timezone != "America/Los_Angeles":
+            profile.timezone = update.timezone
+        if update.digest_schedule and update.digest_schedule != "Friday morning":
+            profile.digest_schedule = update.digest_schedule
+        if update.whatsapp_consent:
+            profile.whatsapp_consent = True
+        if update.teams:
+            profile.teams = update.teams
+            profile.favorite_teams = update.teams
+        if update.athletes:
+            profile.athletes = update.athletes
+        if update.sports:
+            profile.sports = update.sports
+            profile.favorite_sports = update.sports
+        if update.clarification_choices:
+            profile.clarification_choices.update(update.clarification_choices)
 
     def resolve_ambiguity(self, choice: str) -> AgentResponse:
         profile = self._require_profile()

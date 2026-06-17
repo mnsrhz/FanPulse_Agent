@@ -350,6 +350,35 @@ def test_agent_approval_is_idempotent(tmp_path):
     assert digest_history_rows == 1
 
 
+def test_agent_accepts_contact_update_after_digest_approval_block(tmp_path):
+    db_path = tmp_path / "agent.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    response = agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers and Novak Djokovic. Send my digest every Friday morning."
+    )
+    assert response.requires_action == "confirm_preferences"
+    response = agent.confirm_preferences()
+    assert response.requires_action == "approve_digest"
+    assert response.digest is not None
+    original_digest = response.digest
+
+    blocked = agent.approve_and_send_digest()
+    assert blocked.requires_action == "confirm_preferences"
+    assert "phone number" in blocked.message
+
+    updated = agent.handle_user_message("Send it to +14155550123 on WhatsApp.")
+    assert updated.requires_action == "approve_digest"
+    assert updated.digest is original_digest
+    assert updated.profile.phone_number == "+14155550123"
+    assert updated.profile.whatsapp_consent is True
+
+    sent = agent.approve_and_send_digest()
+    assert sent.requires_action == "complete"
+    assert sent.digest is original_digest
+    assert sent.digest.sent is True
+
+
 def test_weekly_job_runs_for_enrolled_user(tmp_path):
     from weekly_digest_job import run_weekly_digest_job
 

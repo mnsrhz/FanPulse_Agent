@@ -38,51 +38,84 @@ def apply_styles() -> None:
         """
         <style>
         :root {
-            --fp-bg: #080b12;
-            --fp-panel: #111827;
-            --fp-panel-2: #151f2e;
-            --fp-line: rgba(148, 163, 184, 0.22);
-            --fp-text: #e5edf7;
-            --fp-muted: #94a3b8;
+            --fp-bg: #07111f;
+            --fp-panel: #0f1b2d;
+            --fp-panel-2: #122139;
+            --fp-line: #22324b;
+            --fp-text: #f3f7ff;
+            --fp-muted: #93a4bd;
             --fp-green: #22c55e;
-            --fp-blue: #38bdf8;
-            --fp-gold: #f8c14a;
+            --fp-blue: #4fc3ff;
+            --fp-purple: #8b5cf6;
+            --fp-gold: #f59e0b;
         }
         .stApp {
             background:
-                radial-gradient(circle at 18% 12%, rgba(56, 189, 248, 0.10), transparent 28rem),
-                linear-gradient(135deg, #070a11 0%, #101826 48%, #0c1019 100%);
+                radial-gradient(circle at 20% 0%, #183b64, transparent 34%),
+                linear-gradient(135deg, #06101e, #0b1020);
             color: var(--fp-text);
         }
         [data-testid="stHeader"] { background: rgba(8, 11, 18, 0); }
         [data-testid="stSidebar"] { background: var(--fp-bg); }
-        .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1240px; }
+        .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1280px; }
         .fp-shell {
             border: 1px solid var(--fp-line);
-            background: rgba(17, 24, 39, 0.76);
-            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.045);
+            border-radius: 20px;
             padding: 1rem;
-            box-shadow: 0 22px 60px rgba(0, 0, 0, 0.30);
+            box-shadow: 0 32px 90px rgba(0, 0, 0, 0.25);
+        }
+        .fp-logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            color: var(--fp-text);
+            font-size: 1.35rem;
+            font-weight: 900;
+            margin-bottom: 2.8rem;
+        }
+        .fp-mark {
+            width: 44px;
+            height: 44px;
+            border-radius: 16px;
+            display: inline-grid;
+            place-items: center;
+            background: linear-gradient(135deg, var(--fp-blue), var(--fp-purple));
+            box-shadow: 0 14px 44px rgba(79, 195, 255, 0.20);
         }
         .fp-kicker {
             color: var(--fp-blue);
             font-size: 0.76rem;
-            font-weight: 700;
+            font-weight: 900;
             letter-spacing: 0;
             text-transform: uppercase;
         }
         .fp-title {
             color: #f8fafc;
-            font-size: 2.05rem;
-            font-weight: 800;
-            line-height: 1.05;
-            margin: 0.2rem 0 0.5rem;
+            font-size: 3.55rem;
+            font-weight: 950;
+            line-height: 0.98;
+            margin: 0.5rem 0 1.1rem;
         }
-        .fp-subtle { color: var(--fp-muted); font-size: 0.94rem; }
+        .fp-subtle { color: #c5d3e7; font-size: 1.05rem; line-height: 1.6; }
+        .fp-mini-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin-top: 1.6rem;
+        }
+        .fp-mini-card {
+            border: 1px solid var(--fp-line);
+            background: rgba(255, 255, 255, 0.045);
+            border-radius: 20px;
+            padding: 1rem;
+        }
+        .fp-mini-card b { display: block; margin-bottom: 0.45rem; color: #fff; }
+        .fp-mini-card span { color: var(--fp-muted); font-size: 0.82rem; line-height: 1.45; }
         .fp-card {
             border: 1px solid var(--fp-line);
-            background: rgba(21, 31, 46, 0.86);
-            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 20px;
             padding: 0.95rem;
             margin-bottom: 0.8rem;
         }
@@ -108,9 +141,56 @@ def apply_styles() -> None:
             padding: 0.2rem 0.55rem;
             margin: 0.12rem 0.18rem 0.12rem 0;
         }
+        .fp-phone {
+            background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+            border: 1px solid var(--fp-line);
+            border-radius: 36px;
+            padding: 16px;
+            box-shadow: 0 32px 90px rgba(0,0,0,.32);
+        }
+        .fp-phone-topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #0b1729;
+            border: 1px solid #1e2f49;
+            border-bottom: 0;
+            border-radius: 26px 26px 0 0;
+            padding: 16px 18px;
+        }
+        .fp-agent-profile { display: flex; gap: 11px; align-items: center; }
+        .fp-avatar {
+            width: 39px;
+            height: 39px;
+            border-radius: 14px;
+            display: grid;
+            place-items: center;
+            background: linear-gradient(135deg, var(--fp-blue), var(--fp-green));
+        }
+        .fp-phone-body {
+            background: #071321;
+            border: 1px solid #1e2f49;
+            border-top: 0;
+            border-radius: 0 0 26px 26px;
+            padding: 18px;
+        }
         .fp-event {
-            border-left: 3px solid var(--fp-gold);
-            background: rgba(15, 23, 42, 0.78);
+            display: grid;
+            grid-template-columns: 42px 1fr;
+            gap: 12px;
+            border: 1px solid var(--fp-line);
+            background: #0a1729;
+            border-radius: 16px;
+            padding: 12px;
+        }
+        .fp-emoji {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            border-radius: 14px;
+            background: #152948;
+            font-size: 1.25rem;
         }
         .fp-event-meta {
             color: var(--fp-muted);
@@ -122,23 +202,36 @@ def apply_styles() -> None:
             font-size: 0.8rem;
             word-break: break-word;
         }
+        .fp-source a { color: #8bdcff !important; text-decoration: none; }
         .fp-status-ok { color: var(--fp-green); font-weight: 700; }
         .fp-status-wait { color: var(--fp-gold); font-weight: 700; }
         .stButton > button {
-            border-radius: 8px;
-            border: 1px solid rgba(148, 163, 184, 0.28);
-            background: rgba(15, 23, 42, 0.86);
+            border-radius: 15px;
+            border: 1px solid var(--fp-line);
+            background: rgba(255,255,255,.06);
             color: #f8fafc;
             min-height: 2.55rem;
+            font-weight: 850;
         }
         .stButton > button:hover {
             border-color: rgba(56, 189, 248, 0.72);
             color: #ffffff;
         }
         [data-testid="stChatMessage"] {
-            border: 1px solid rgba(148, 163, 184, 0.16);
-            border-radius: 8px;
-            background: rgba(15, 23, 42, 0.55);
+            max-width: 86%;
+            border: 0;
+            border-radius: 17px;
+            background: #11243d;
+            margin: 0.6rem 0;
+            padding: 0.25rem 0.4rem;
+        }
+        [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+            margin-left: auto;
+            background: linear-gradient(135deg, var(--fp-blue), var(--fp-purple));
+        }
+        @media (max-width: 950px) {
+            .fp-title { font-size: 2.65rem; }
+            .fp-mini-grid { grid-template-columns: 1fr; }
         }
         </style>
         """,
@@ -418,11 +511,17 @@ left, right = st.columns([0.92, 1.55], gap="large")
 with left:
     st.markdown(
         """
-        <div class="fp-shell">
+        <div class="fp-logo"><span class="fp-mark">🏆</span><span>FanPulse</span></div>
+        <section class="fp-hero">
             <div class="fp-kicker">FanPulse AI</div>
-            <div class="fp-title">Weekly sports signal, ready for WhatsApp.</div>
-            <div class="fp-subtle">Mock-first onboarding, digest preview, approval, and traceable tool calls.</div>
-        </div>
+            <div class="fp-title">Tell it who you follow. It handles the rest.</div>
+            <div class="fp-subtle">FanPulse asks for your favorite teams and athletes in plain English, finds the next events, adds source links, and sends a clean weekly WhatsApp digest after approval.</div>
+            <div class="fp-mini-grid">
+                <div class="fp-mini-card"><b>Conversational</b><span>No long forms. Users can describe teams, athletes, leagues, and delivery preferences in one message.</span></div>
+                <div class="fp-mini-card"><b>Agentic</b><span>The agent chooses tools, resolves ambiguity, retries failures, and asks for help when confidence is low.</span></div>
+                <div class="fp-mini-card"><b>Safe</b><span>WhatsApp opt-in, first-send approval, source links, and hidden trace logs are built in.</span></div>
+            </div>
+        </section>
         """,
         unsafe_allow_html=True,
     )
@@ -453,15 +552,22 @@ with left:
 
 with right:
     st.markdown(
-        """
-        <div class="fp-shell">
-            <div class="fp-kicker">Chat</div>
-            <div class="fp-subtle">Tell FanPulse who you follow, then review and approve the digest.</div>
+        f"""
+        <div class="fp-phone">
+        <div class="fp-phone-topbar">
+            <div class="fp-agent-profile">
+                <div class="fp-avatar">🤖</div>
+                <div>
+                    <div style="font-weight:900;color:#fff;">FanPulse Agent</div>
+                    <div style="font-size:12px;color:#93a4bd;">{escape(status_text)}</div>
+                </div>
+            </div>
+            <div style="font-size:12px;color:#93a4bd;">WhatsApp-ready</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.write("")
+    st.markdown('<div class="fp-phone-body">', unsafe_allow_html=True)
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
@@ -471,6 +577,7 @@ with right:
     if prompt:
         submit_user_message(prompt)
         st.rerun()
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     st.write("")
     render_digest(digest)
