@@ -221,3 +221,68 @@ def test_weekly_job_runs_for_enrolled_user(tmp_path):
 
     assert summary["users_processed"] == 1
     assert summary["digests_created"] == 1
+
+
+def test_weekly_job_is_idempotent_for_run_key(tmp_path):
+    from weekly_digest_job import run_weekly_digest_job
+
+    db_path = tmp_path / "weekly.db"
+    db = FanPulseDB(str(db_path))
+    agent = FanPulseAgent(db)
+    agent.handle_user_message(
+        "I am Mansoor. I follow the Lakers and Real Madrid. Send my digest every Friday morning "
+        "to +14155550123 on WhatsApp."
+    )
+    agent.confirm_preferences()
+
+    first_summary = run_weekly_digest_job(str(db_path), run_key="2026-W25")
+    second_summary = run_weekly_digest_job(str(db_path), run_key="2026-W25")
+
+    assert first_summary["digests_created"] == 1
+    assert first_summary["sent"] == 1
+    assert second_summary["skipped"] == 1
+    assert second_summary["digests_created"] == 0
+    assert second_summary["sent"] == 0
+    with sqlite3.connect(db_path) as connection:
+        digest_history_rows = connection.execute(
+            "select count(*) from digest_history"
+        ).fetchone()[0]
+        whatsapp_runs = connection.execute(
+            "select count(*) from tool_runs where tool_name = 'whatsapp.send_digest'"
+        ).fetchone()[0]
+
+    assert digest_history_rows == 1
+    assert whatsapp_runs == 1
+
+
+def test_weekly_job_logs_failure_for_external_user_id(tmp_path, monkeypatch):
+    from weekly_digest_job import run_weekly_digest_job
+
+    db_path = tmp_path / "weekly.db"
+    db = FanPulseDB(str(db_path))
+    db.save_user_preferences(
+        UserProfile(
+            user_id="wa-user-123",
+            name="WhatsApp Fan",
+            phone_number="+14155550123",
+            whatsapp_consent=True,
+            sports=["basketball"],
+        )
+    )
+
+    def fail_weekly_digest(self, profile):
+        raise RuntimeError("forced weekly failure")
+
+    monkeypatch.setattr(
+        FanPulseAgent, "run_weekly_digest_for_profile", fail_weekly_digest
+    )
+
+    summary = run_weekly_digest_job(str(db_path))
+
+    assert summary["failed"] == 1
+    with sqlite3.connect(db_path) as connection:
+        failed_steps = connection.execute(
+            "select count(*) from agent_trace where step = 'weekly_digest_failed'"
+        ).fetchone()[0]
+
+    assert failed_steps == 1

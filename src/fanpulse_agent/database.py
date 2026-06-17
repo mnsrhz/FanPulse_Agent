@@ -249,6 +249,49 @@ class FanPulseDB:
             )
             return int(cursor.lastrowid)
 
+    def resolve_user_id(self, profile: UserProfile) -> int:
+        self.initialize()
+        with self._connect() as connection:
+            user_id = self._find_user_id(connection, profile)
+        if user_id is not None:
+            return user_id
+        return self.save_user_preferences(profile)
+
+    def has_digest_run(self, user_id: int, run_key: str) -> bool:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "select payload_json from digest_history where user_id = ?",
+                (user_id,),
+            ).fetchall()
+        for row in rows:
+            payload = self._from_json(row[0], {})
+            if payload.get("scheduled_run_key") == run_key:
+                return True
+        return False
+
+    def mark_latest_digest_run(self, user_id: int, run_key: str) -> None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select id, payload_json
+                from digest_history
+                where user_id = ?
+                order by id desc
+                limit 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if not row:
+                return
+            payload = self._from_json(row[1], {})
+            payload["scheduled_run_key"] = run_key
+            connection.execute(
+                "update digest_history set payload_json = ? where id = ?",
+                (self._to_json(payload), row[0]),
+            )
+
     def load_enrolled_users(self) -> List[UserProfile]:
         self.initialize()
         with self._connect() as connection:
